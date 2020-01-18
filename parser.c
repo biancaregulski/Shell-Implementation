@@ -20,6 +20,7 @@ void addToken(instruction* instr_ptr, char* tok);
 void printTokens(instruction* instr_ptr);
 void clearInstruction(instruction* instr_ptr);
 void addNull(instruction* instr_ptr);
+int pathExists(const char* path);
 
 int main() {
 	char* exit = "exit";
@@ -119,23 +120,53 @@ void extendTokens(instruction* instr_ptr)
 {
 	int i;
 	int count = 0;
-	char cwd[1024];
+
+	char relative[1024];
 	char* pwd = getenv("PWD");
 	char* prevDir = "..";
 	char* currDir = ".";
 	char* homeDir = "~";
+	
+	printf("Line1\n");
+	char* path_split;
+	printf("Line2\n");
+	char* path = getenv("PATH");
+	printf("Line3\n");
+	path_split = strtok(path, ":");
+	printf("Line4\n");
+	while (path_split != NULL) {
+	printf("LINE5: %s\n", path_split);
+		strcat(path_split, instr_ptr->tokens[0]);		// ADDS 'd' HERE
+	printf("line 6: %s\n", path_split);
+		if(pathExists(path_split)) printf("Executing command %s", instr_ptr->tokens[0]);
+	printf("lINE 7: %s\n", path_split);
+		path_split = strtok(NULL, ":");
+	}
 
-	getcwd(cwd, sizeof(cwd));
-	printf("%zu\n", strlen(getenv("PWD")));
 	for(i = 0; i < instr_ptr->numTokens; i++)
 	{
 		if ((instr_ptr->tokens)[i] != NULL){
+			for(int y = 0; y < strlen((instr_ptr->tokens)[i]); y++)
+			{
+				if((instr_ptr->tokens)[i][y] != '/'){
+					strcpy(relative, getenv("PWD"));
+					strcat(relative, "/");
+					strcat(relative, (instr_ptr->tokens)[i]);
+
+					if(pathExists(relative)){				// checks if file exists, -1 DNE
+						printf("%s\n", relative);
+					}
+					else {}
+
+					break;
+				}
+			}
 			if(strcmp((instr_ptr->tokens)[i], prevDir) == 0){
 				char* temp = malloc(strlen(getenv("PWD")));
 				for(int i = strlen(getenv("PWD")); pwd[i] != '/'; i-- ){
 					count++;
 				}
-				printf("%d %zu\n", count, strlen(getenv("PWD")));
+
 				for(int j = 0; j < strlen(getenv("PWD")) - count; j++){
 					temp[j] = pwd[j];
 				}
@@ -173,4 +204,9 @@ void clearInstruction(instruction* instr_ptr)
 
 	instr_ptr->tokens = NULL;
 	instr_ptr->numTokens = 0;
+}
+
+int pathExists(const char* path) {
+	if(access(path, F_OK) == -1) return 0;
+	else return 1;
 }
