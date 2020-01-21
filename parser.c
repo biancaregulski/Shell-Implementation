@@ -1,4 +1,3 @@
-
 //COP4610
 //Project 1 Starter Code
 //example code for initial parsing
@@ -21,6 +20,7 @@ void printTokens(instruction* instr_ptr);
 void clearInstruction(instruction* instr_ptr);
 void addNull(instruction* instr_ptr);
 int pathExists(const char* path);
+void checkPaths(instruction* instr_ptr);
 
 int main() {
 	char* exit = "exit";
@@ -126,27 +126,15 @@ void extendTokens(instruction* instr_ptr)
 	char* prevDir = "..";
 	char* currDir = ".";
 	char* homeDir = "~";
-	
-	printf("Line1\n");
-	char* path_split;
-	printf("Line2\n");
-	char* path = getenv("PATH");
-	printf("Line3\n");
-	path_split = strtok(path, ":");
-	printf("Line4\n");
-	while (path_split != NULL) {
-	printf("LINE5: %s\n", path_split);
-		strcat(path_split, instr_ptr->tokens[0]);		// ADDS 'd' HERE
-	printf("line 6: %s\n", path_split);
-		if(pathExists(path_split)) printf("Executing command %s", instr_ptr->tokens[0]);
-	printf("lINE 7: %s\n", path_split);
-		path_split = strtok(NULL, ":");
-	}
+
+	//Check if first token is an executable command
+	checkPaths(instr_ptr);
 
 	for(i = 0; i < instr_ptr->numTokens; i++)
 	{
 		if ((instr_ptr->tokens)[i] != NULL){
-			for(int y = 0; y < strlen((instr_ptr->tokens)[i]); y++)
+			int y;
+			for(y = 0; y < strlen((instr_ptr->tokens[i])); y++)
 			{
 				if((instr_ptr->tokens)[i][y] != '/'){
 					strcpy(relative, getenv("PWD"));
@@ -163,11 +151,12 @@ void extendTokens(instruction* instr_ptr)
 			}
 			if(strcmp((instr_ptr->tokens)[i], prevDir) == 0){
 				char* temp = malloc(strlen(getenv("PWD")));
-				for(int i = strlen(getenv("PWD")); pwd[i] != '/'; i-- ){
+				int i, j;
+				for(i = strlen(getenv("PWD")); pwd[i] != '/'; i-- ){
 					count++;
 				}
 
-				for(int j = 0; j < strlen(getenv("PWD")) - count; j++){
+				for(j = 0; j < strlen(getenv("PWD")) - count; j++){
 					temp[j] = pwd[j];
 				}
 				printf("%s\n", temp);
@@ -209,4 +198,40 @@ void clearInstruction(instruction* instr_ptr)
 int pathExists(const char* path) {
 	if(access(path, F_OK) == -1) return 0;
 	else return 1;
+}
+
+void checkPaths(instruction* instr_ptr) {
+	int commandFound = 0;
+	char* path_split = (char*) malloc(sizeof(char)*50);
+	char* checkpaths[20];
+	int a = 0;
+	for(a = 0; a < 20; ++a) {
+		checkpaths[a] = (char*) malloc(sizeof(char)*50);
+	}
+	char* envpath = malloc(strlen(getenv("PATH"))+1);
+	strncpy(envpath,getenv("PATH"),strlen(getenv("PATH")));
+	strcpy(path_split,strtok(envpath, ":"));
+	int j = 0, k = 0;
+	while (path_split != NULL) {
+		strncpy(checkpaths[j],path_split,strlen(path_split)+1);
+		++j;
+		path_split = strtok(NULL, ":");
+	}
+	for(k=0; k < j; ++k) {
+		strcat(checkpaths[k], "/");
+		strcat(checkpaths[k], instr_ptr->tokens[0]);
+		if(pathExists(checkpaths[k])) {
+			printf("Executing command %s\n", instr_ptr->tokens[0]);
+			commandFound = 1;
+			break;
+		}
+		
+	}
+	if(commandFound == 0) printf("%s : No command found\n", instr_ptr->tokens[0]);	
+	int d = 0;
+	for(d=0;d<20;++d) {
+		free(checkpaths[d]);
+	}
+	free(envpath);
+	free(path_split);
 }
