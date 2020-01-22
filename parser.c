@@ -19,8 +19,9 @@ void addToken(instruction* instr_ptr, char* tok);
 void addNull(instruction* instr_ptr);
 
 void shortcutResolution(instruction* instr_ptr);		//Shortcut Resolution
+void expandVariable(char* token);
 
-void pathResolution(char* token);				//Path resolution
+void pathResolution(const char* token);				//Path resolution
 
 void printTokens(instruction* instr_ptr);			//Output tokens
 void clearInstruction(instruction* instr_ptr);			//Clear Instruction
@@ -143,8 +144,15 @@ void shortcutResolution(instruction* instr_ptr)
 
 	for(i = 0; i < instr_ptr->numTokens; i++)
 	{
-		//Do not convert if token is an absolute path or a variable
-		if(instr_ptr->tokens[i][0] == '/' || instr_ptr->tokens[i][0] == '$') continue;
+		//Do not convert if token is an absolute path
+		if(instr_ptr->tokens[i][0] == '/') continue;
+
+		//Expand variable token
+		if(instr_ptr->tokens[i][0] == '$') 
+		{
+			expandVariable(instr_ptr->tokens[i]);
+			continue;
+		}
 
 		for(j = 0; j < strlen(instr_ptr->tokens[i]); j++)
 		{
@@ -207,20 +215,32 @@ void shortcutResolution(instruction* instr_ptr)
 	}
 }
 
-void pathResolution(char* token) {
+void expandVariable(char* token) {
+	char* temp = &token[1];
+	temp = getenv(temp);
+	token = realloc(token, strlen(temp)+1);
+	strcpy(token, temp);
+}
+
+void pathResolution(const char* token) {
+
 	int i = 0, j = 0;
+
 	int commandFound = 0;
 
 	char* checkpaths[32];
 
-	char* envpath = getenv("PATH");
+	const char* path = getenv("PATH");
+
+	char* envpath = malloc(strlen(path)+1);
+	strcpy(envpath, path);
 
 	char* path_split = malloc(strlen(envpath)+1);
 
 	//Loop to split $PATH into a pointer array
 	strcpy(path_split,strtok(envpath, ":"));
 	for (j=0; path_split != NULL; ++j) {
-		checkpaths[j] = malloc(strlen(path_split)+1+strlen(token)+1);
+		checkpaths[j] = malloc(strlen(path_split)+strlen(token)+2);
 		strcpy(checkpaths[j],path_split);
 		path_split = strtok(NULL, ":");
 	}
