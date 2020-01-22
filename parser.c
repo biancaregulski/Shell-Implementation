@@ -45,11 +45,8 @@ int main() {
 		//Shortcut resolution
 		shortcutResolution(&instr);
 
-		//Path resolution
-		//pathResolution(&instr);
-
 		//Output tokens
-		//printTokens(&instr);
+		printTokens(&instr);
 
 		//Clear instruction
 		clearInstruction(&instr);
@@ -67,7 +64,7 @@ void parseInput(instruction* instr_ptr) {
 	do {
 		//scans for next token and allocates token var to size of scanned token
 		scanf("%ms", &token);
-		temp = (char*)malloc((strlen(token) + 1) * sizeof(char));
+		temp = malloc(strlen(token)+1);
 
 		int i;
 		int start = 0;
@@ -83,8 +80,8 @@ void parseInput(instruction* instr_ptr) {
 				char specialChar[2];
 				specialChar[0] = token[i];
 				specialChar[1] = '\0';
-					addToken(instr_ptr,specialChar);
-					start = i + 1;
+				addToken(instr_ptr,specialChar);
+				start = i + 1;
 			}
 		}
 
@@ -131,7 +128,8 @@ void addNull(instruction* instr_ptr)
 		instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens+1) * sizeof(char*));
 
 	instr_ptr->tokens[instr_ptr->numTokens] = (char*) NULL;
-	//instr_ptr->numTokens++;
+
+	//instr_ptr->numTokens++; <-----Why increment the number of tokens for a null token
 }
 
 void shortcutResolution(instruction* instr_ptr)
@@ -139,11 +137,9 @@ void shortcutResolution(instruction* instr_ptr)
 	int i,j;
 	int count = 0;
 
-	char* pwd = getenv("PWD");
-	char* relative;
-	char* prevDir = "..";
-	char* currDir = ".";
-	char* homeDir = "~";
+	const char* pwd = getenv("PWD");
+	const char* home = getenv("HOME");
+	char* temp;
 
 	for(i = 0; i < instr_ptr->numTokens; i++)
 	{
@@ -155,37 +151,58 @@ void shortcutResolution(instruction* instr_ptr)
 			if((instr_ptr->tokens)[i][j] == '/')
 			{
 				//A slash is found, token is a relative path
-				relative = malloc(strlen(pwd)+strlen(instr_ptr->tokens[i])+2);
-				strcpy(relative, pwd);
-				strcat(relative, "/");
-				strcat(relative, instr_ptr->tokens[i]);
-				if(pathExists(relative)){
-					instr_ptr->tokens[i] = realloc(instr_ptr->tokens[i], strlen(relative)+1);
-					strcpy(instr_ptr->tokens[i], relative);
-					free(relative);
+
+				//If the token starts with '~', replace with $HOME
+				if(instr_ptr->tokens[i][0] == '~')
+				{
+					temp = malloc(strlen(home)+strlen(instr_ptr->tokens[i])+2);
+					strcpy(temp, home);
+					strcat(temp, &instr_ptr->tokens[i][1]);
+					instr_ptr->tokens[i] = realloc(instr_ptr->tokens[i], strlen(temp)+1);
+					strcpy(instr_ptr->tokens[i], temp);
+					free(temp);
+					temp = NULL;
+					break;
 				}
-				else printf("Path does not exist: %s/%s\n", pwd, instr_ptr->tokens[i]);
-				break;
+
+				//Otherwise, expand relative directory into absolute directory
+				else
+				{
+					temp = malloc(strlen(pwd)+strlen(instr_ptr->tokens[i])+2);
+					strcpy(temp, pwd);
+					strcat(temp, "/");
+					strcat(temp, instr_ptr->tokens[i]);
+					instr_ptr->tokens[i] = realloc(instr_ptr->tokens[i], strlen(temp)+1);
+					strcpy(instr_ptr->tokens[i], temp);
+					free(temp);
+					temp = NULL;
+					break;
+				}
 			}
 		}
 
-		//Token was not converted to absolute path. Checking if token is a command
+		//Token did not contain any slashes. Checking if token is a command.
 		if(j == strlen(instr_ptr->tokens[i])) pathResolution(instr_ptr->tokens[i]);
 
 	}
 
+	//After expanding tokens as directories, replace dot shortcuts
 	for(i = 0; i < instr_ptr->numTokens; i++)
 	{
-		for(j = 0; j < strlen(instr_ptr->tokens[i]); ++j)
+		//Replace double dot first since single dot is a substring
+		//Removed the directory before the double dot
+		if((temp = strstr(instr_ptr->tokens[i], "/..")) != NULL)
 		{
-			if(instr_ptr->tokens[i][j] == '.')
-			{
-				printf("Character %d of token %d is a .\n",j+1,i+1);
-			}
-			else if(instr_ptr->tokens[i][j] == '~')
-			{
-				printf("Character %d of token %d is a ~\n",j+1,i+1);
-			}
+			char* temp2 = &temp[3];
+			--temp;
+			while(*temp != '/'){--temp;};
+			memmove(temp, temp2, strlen(temp2)+1);
+		}
+
+		//Simply remove all instances of single dot
+		if((temp = strstr(instr_ptr->tokens[i], "/.")) != NULL)
+		{
+			memmove(temp, &temp[2], strlen(temp)-1);
 		}
 	}
 }
@@ -194,45 +211,41 @@ void pathResolution(char* token) {
 	int i = 0, j = 0;
 	int commandFound = 0;
 
-	char* path_split = malloc(128);
-
 	char* checkpaths[32];
 
-	//allocate another string to copy
-	char* envpath = malloc(strlen(getenv("PATH"))+1);
+	char* envpath = getenv("PATH");
 
-	//copy PATH to new variable
-	strcpy(envpath,getenv("PATH"));
+	char* path_split = malloc(strlen(envpath)+1);
 
-	//get first token from variable
+	//Loop to split $PATH into a pointer array
 	strcpy(path_split,strtok(envpath, ":"));
-
-	//split up path into individual directories
 	for (j=0; path_split != NULL; ++j) {
-		checkpaths[j] = (char*) malloc(strlen(path_split)+strlen(token)+2);
+		checkpaths[j] = malloc(strlen(path_split)+1+strlen(token)+1);
 		strcpy(checkpaths[j],path_split);
 		path_split = strtok(NULL, ":");
 	}
 
-	//check if the program exists in each directory
+	//Check if the program exists in each directory
+	//If it does, execute it
 	for(i=0; i < j; ++i) {
 		strcat(checkpaths[i], "/");
 		strcat(checkpaths[i], token);
 		if(pathExists(checkpaths[i])) {
+			//TODO: -----------------------------Execute command---------------------------------
 			printf("Executing command %s\n", token);
 			commandFound = 1;
 			break;
 		}
 
 	}
-	if(commandFound == 0) printf("%s : No command found\n", token);
 
-	//free memory
+	if(commandFound == 0) printf("%s : Command not found\n", token);
+
+	//Free memory
 	for(i=0;i<j;++i) {
 		free(checkpaths[i]);
 	}
 	free(path_split);
-	free(envpath);
 }
 
 void printTokens(instruction* instr_ptr)
