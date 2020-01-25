@@ -170,8 +170,8 @@ void extendTokens(instruction* instr_ptr)
         }
     }
     checkPaths(instr_ptr);
-
 }
+
 void printTokens(instruction* instr_ptr)
 {
     int i;
@@ -291,9 +291,65 @@ void executeCommand(instruction* instr_ptr){
 		parameters[parameterIndex] = malloc((strlen(outputFile) + 1) * sizeof(char));
 		strcpy(parameters[parameterIndex], outputFile);	
 	}
+  
+void executeCommand(instruction* instr_ptr){
+	pid_t pid;
 
-    pid = fork();
-        
+	int fd_in;
+	int fd_out;
+
+	char *inputFile, *outputFile;
+	int state = redirectionCheck(instr_ptr);
+	//printf("%d\n", state);
+
+	char * parameters;
+	int parameterIndex = 0;
+
+	if (state == -2) {
+		printf("Invalid syntax\n");
+	}
+	if (state > 0) {
+		parameters = malloc((strlen(instr_ptr->tokens[0]) + 1) * sizeof(char));
+		strcpy(parameters, instr_ptr->tokens[0]);
+		parameterIndex += 1;
+	}
+
+	// input redirection
+	if (state == 1 || state == 3) {
+		if( access( inputFile, F_OK ) == -1 ) {             // create file if it does not exist
+			printf("File %s does not exist\n", inputFile);
+		}
+
+		// input redirection for child process
+		parameters = (char*)realloc(parameters, strlen(parameters) + 3 + strlen(inputFile) + 1 * sizeof(char));
+		strcat(parameters, " < ");
+		strcat(parameters, inputFile);
+		inputFile = getInputFile(instr_ptr);
+		fd_in = open(inputFile, O_RDONLY);
+
+		parameterIndex += 2;
+	}
+
+	// output redirection
+	if (state == 2 || state == 3) {
+		parameters = (char*)realloc(parameters, strlen(parameters) + 3 + strlen(outputFile) + 1 * sizeof(char));
+		strcat(parameters, " > ");
+
+		outputFile = getOutputFile(instr_ptr);
+
+		if( access( outputFile, F_OK ) == -1 ) {             // create file if it does not exist
+			fd_out = open(outputFile, O_RDWR | O_CREAT | O_TRUNC, 0600);
+		}
+		else {
+			fd_out = open(outputFile, O_RDWR | O_CREAT | O_TRUNC);
+		}
+
+		strcat(parameters, outputFile);
+		parameterIndex += 2;
+	}
+
+	pid = fork();
+
 	int status;
 	if(pid == -1){
 	    //error
@@ -314,13 +370,13 @@ void executeCommand(instruction* instr_ptr){
 			close(fd_out);
 		}
 		if (state > 0) {
-	    	execv(instr_ptr->tokens[0], parameters);
-	    	free(parameters);
-            exit(0);
-	    }
-	    else {
-	    	execv(instr_ptr->tokens[0], instr_ptr->tokens);
-	    }
+			system(parameters);
+			free(parameters);
+			exit(0);
+		}
+		else {
+			execv(instr_ptr->tokens[0], instr_ptr->tokens);
+		}
 	}
 	else{
 	    //parent
@@ -354,6 +410,65 @@ int redirectionCheck(instruction* instr_ptr) {
     if (input_state == 0 && output_state == 0) {
         return -1;                                      // no redirection
     }
+}
+
+char * getInputFile(instruction* instr_ptr) {
+	char * inputFile;
+	for (int i = 1; i < instr_ptr->numTokens; i++) {
+		if (strcmp((instr_ptr->tokens)[i - 1], "<") == 0) {
+			inputFile = (char*)malloc((strlen((instr_ptr->tokens)[i]) + 1) * sizeof(char));
+			strcpy(inputFile, instr_ptr->tokens[i]);
+			return inputFile;
+		}
+	}
+}
+
+char * getOutputFile(instruction* instr_ptr) {
+	char * outputFile;
+	for (int i = 1; i < instr_ptr->numTokens; i++) {
+		if (strcmp((instr_ptr->tokens)[i - 1], ">") == 0) {
+			outputFile = (char*)malloc((strlen((instr_ptr->tokens)[i]) + 1) * sizeof(char));
+			strcpy(outputFile, instr_ptr->tokens[i]);
+			return outputFile;
+		}
+	}
+}
+
+//checks for redirection and returns the case
+int redirectionCheck(instruction* instr_ptr) {
+	int input_state = 0, output_state = 0;          // booleans for type of redirection state
+
+	for (int i = 0; i < instr_ptr->numTokens; i++) {
+		if ((instr_ptr->tokens)[i] != NULL) {
+			if (strcmp((instr_ptr->tokens)[i], "<") == 0) {
+				if ((instr_ptr->tokens)[i - 1] == NULL ||(instr_ptr->tokens)[i + 1] == NULL) {   // replace this later with more sophisticated error checking
+					// must have file after '<' &&
+					// (must have command before '<' || must have a file before '<' if
+					// there is also output redirection)
+					return -2;                                     // invalid syntax
+				}
+				input_state = 1;
+			}
+			else if (strcmp((instr_ptr->tokens)[i], ">") == 0) {
+				if ((instr_ptr->tokens)[i - 1] == NULL ||(instr_ptr->tokens)[i + 1] == NULL) {
+					return -2;                                     // invalid syntax
+				}
+				output_state = 1;
+			}
+			if (input_state == 1 && output_state == 1) {
+				return 3;                                      // input and output redirection
+			}
+		}
+	}
+	if (input_state == 1) {
+		return 1;
+	}
+	else if (output_state == 1) {
+		return 2;
+	}
+	if (input_state == 0 && output_state == 0) {
+		return -1;                                      // no redirection
+	}
 }
 
 char * getInputFile(instruction* instr_ptr) {
