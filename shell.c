@@ -406,10 +406,6 @@ void executeCommand(instruction* instr_ptr){
                 }
             }
             parameters[preRedirectionSize] = NULL;
-            for (int i = 0; i < preRedirectionSize; i++) {
-                if ((parameters)[i] != NULL) {
-                }
-            }
             execv(parameters[0], parameters);
             free(parameters);
         }
