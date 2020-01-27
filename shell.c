@@ -27,8 +27,10 @@ void expandVariable(char** token);
 void pathResolution(instruction* instr_ptr);				//Path resolution
 
 void executeCommand(instruction* instr_ptr);
-
+void executePipedCommand(char ** command1, char ** command2);
 int redirectionCheck(instruction* instr_ptr, int * preRedirectionSize);
+int countPipes(instruction* instr_ptr);
+
 char * getInputFile(instruction* instr_ptr);
 char * getOutputFile(instruction* instr_ptr);
 
@@ -161,7 +163,7 @@ void shortcutResolution(instruction* instr_ptr)
 		}
 	}
 
-	//Checking if first token is a command.
+	// prefix executable command paths
 	pathResolution(instr_ptr);
 
 	for(i = 0; i < instr_ptr->numTokens; i++)
@@ -249,45 +251,65 @@ void pathResolution(instruction* instr_ptr) {
 	const char* path = getenv("PATH");
 
 	char* envpath = malloc(strlen(path)+1);
-	strcpy(envpath, path);
+    strcpy(envpath, path);
 
 	char* path_split;
 
-	//Loop to split $PATH into a pointer array
-	path_split = strtok(envpath, ":");
-	for (j=0; path_split != NULL; ++j) {
-		checkpaths[j] = malloc(strlen(path_split)+strlen(instr_ptr->tokens[0])+2);
-		strcpy(checkpaths[j],path_split);
-		path_split = strtok(NULL, ":");
-	}
 
-	//Check if the program exists in each directory
-	//If it does, execute it
-	for(i=0; i < j; ++i) {
-		strcat(checkpaths[i], "/");
-		strcat(checkpaths[i], instr_ptr->tokens[0]);
-		if(pathExists(checkpaths[i])) {
-			//printf("Command found at %s\n", checkpaths[i]);
-			instr_ptr->tokens[0] = realloc(instr_ptr->tokens[0], strlen(checkpaths[i])+1);
-			strcpy(instr_ptr->tokens[0], checkpaths[i]);
+    for (int i = 0; i < instr_ptr->numTokens; i++) {
+        if ((instr_ptr->tokens)[i] != NULL) {
+            // prefix the first token and tokens immediately after a pipe
+            if (i == 0 || strcmp((instr_ptr->tokens)[i - 1], "|") == 0) {
+                //Loop to split $PATH into a pointer array
+                if (i > 0) {
+                    memcpy(envpath, path, strlen(path)+1);
+                }
+                path_split = strtok(envpath, ":");
+                for (j=0; path_split != NULL; ++j) {
+                    checkpaths[j] = malloc(strlen(path_split)+strlen(instr_ptr->tokens[i])+2);
+                    if (i == 0) {
+                        strcpy(checkpaths[j],path_split);
+                    }
+                    else {
+                        memcpy(checkpaths[j],path_split, strlen(path_split) + 1);
+                    }
+                    path_split = strtok(NULL, ":");
 
-			//Free memory
-			for(i=0;i<j;++i) {
-				free(checkpaths[i]);
-			}
-			
-			executeCommand(instr_ptr);
-			return;
-		}
+                }
+                //Check if the program exists in each directory
+                //If it does, execute it
+                for(int k = 0; k < j; ++k) {
+                    strcat(checkpaths[k], "/");
+                    strcat(checkpaths[k], instr_ptr->tokens[i]);
+                    if(pathExists(checkpaths[k])) {
+                        // printf("Command found at %s\n", checkpaths[k]);
+                        instr_ptr->tokens[i] = realloc(instr_ptr->tokens[i], strlen(checkpaths[k])+1);
+                        strcpy(instr_ptr->tokens[i], checkpaths[k]);
 
-	}
+                        //Free memory
+                        for(k = 0; k < j; ++k) {
+                            free(checkpaths[k]);
+                        }
 
-	printf("%s : Command not found\n", instr_ptr->tokens[0]);
+                        break;
+                    }
+                    if (k == j - 1) {
+                        // after searching all possible paths
+                        printf("%s : Command not found\n", instr_ptr->tokens[i]);
 
-	//Free memory
-	for(i=0;i<j;++i) {
-		free(checkpaths[i]);
-	}
+                        //Free memory
+                        for(k = 0; k < j; ++k) {
+                            free(checkpaths[k]);
+                        }
+                        free(envpath);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    free(envpath);
+    executeCommand(instr_ptr);
 }
 
 void printTokens(instruction* instr_ptr)
@@ -336,17 +358,19 @@ int pathIsDir(const char* path) {
 }
 
 void executeCommand(instruction* instr_ptr){
-    pid_t pid;
-
     int fd_in;
     int fd_out;
 
     char *inputFile, *outputFile;
     int preRedirectionSize = -1;
+    int numPipes;
     int state = redirectionCheck(instr_ptr, &preRedirectionSize);
+    if (state == 4) {
+        numPipes = countPipes(instr_ptr);
+    }
 
     if (state == -1) {
-        printf("Error: Invalid syntax\n");
+        perror("Error: Invalid syntax\n");
         exit(1);
     }
 
@@ -356,7 +380,7 @@ void executeCommand(instruction* instr_ptr){
         inputFile = getInputFile(instr_ptr);
 
         if( access( inputFile, F_OK ) == -1 ) {             // file does not exist
-            printf("Error: File %s does not exist\n", inputFile);
+            perror("Error: Input file does not exist\n");
             //exit(1);
 			return;
         }
@@ -376,13 +400,74 @@ void executeCommand(instruction* instr_ptr){
         }
     }
 
-    pid = fork();
+    else if (state == 4) {
+        // piping for child process
+        
+        // indexes of which tokens are pipes
+        int * pipeIndex = calloc(numPipes + 1, sizeof(int));        // is + 1 needed or not?
+        int j = 0;
+        for (int i = 0; i < instr_ptr->numTokens; i++) {
+            if ((instr_ptr->tokens)[i] != NULL) {
+                if (strcmp((instr_ptr->tokens)[i], "|") == 0) {
+                    pipeIndex[j] = i;
+                    j++;
+                }
+            }
+        }
+
+        int numCommand1Tokens = pipeIndex[0];
+        char **command1 = (char **) malloc((numCommand1Tokens + 1) * sizeof(char *));
+        // put tokens before first pipe in the command1 array
+        for (int i = 0; i < numCommand1Tokens; i++) {
+            if ((instr_ptr->tokens)[i] != NULL) {
+                command1[i] = malloc(strlen((instr_ptr->tokens)[i] + 1));
+                strcpy(command1[i], instr_ptr->tokens[i]);
+            }
+        }
+
+        command1[numCommand1Tokens] = NULL;
+        /*printf("%d\n", numCommand1Tokens);
+
+         for (int i = 0; i < numCommand1Tokens; i++) {
+            if ((command1)[i] != NULL) {
+                printf("%s\n", command1[i]);
+            }
+        }*/
+
+        int numCommand2Tokens = instr_ptr->numTokens - numCommand1Tokens - 1;
+        int startingIndex = pipeIndex[0] + 1;
+        char **command2 = (char **) malloc((numCommand2Tokens + 1) * sizeof(char *));
+        int k = 0;
+        for (int i = startingIndex; i < startingIndex + numCommand2Tokens; i++) {
+            if ((instr_ptr->tokens)[i] != NULL) {
+                command2[k] = malloc(strlen((instr_ptr->tokens)[i] + 1));
+                strcpy(command2[k], instr_ptr->tokens[i]);
+                k++;
+            }
+        }
+
+        command2[numCommand2Tokens] = NULL;
+
+        /*for (int i = 0; i < numCommand2Tokens; i++) {
+            if ((command2)[i] != NULL) {
+                printf("%s\n", command2[i]);
+            }
+        }*/
+        executePipedCommand(command1, command2);
+        free(command1);
+        free(command2);
+        free(pipeIndex);
+    }
+
+    pid_t pid = fork();
 
     int status;
+
     if(pid == -1){
-        //error
+        perror("Error: Forking failed\n");
         exit(1);
     }
+
     else if(pid == 0){
         //child process
         if (state == 1 || state == 3) {
@@ -397,7 +482,8 @@ void executeCommand(instruction* instr_ptr){
             dup(fd_out);
             close(fd_out);
         }
-        if (state > 0) {
+        if (state > 0 && state < 4) {
+            // execution for input and/or output redirection
             char **parameters = (char **) malloc((preRedirectionSize + 1) * sizeof(char *));
             for (int i = 0; i < preRedirectionSize; i++) {
                 if ((instr_ptr->tokens)[i] != NULL) {
@@ -406,11 +492,17 @@ void executeCommand(instruction* instr_ptr){
                 }
             }
             parameters[preRedirectionSize] = NULL;
-            execv(parameters[0], parameters);
-            free(parameters);
+            if (execv(parameters[0], parameters) == -1) {
+                perror("Error: Command execution failed\n");
+                exit(1);
+            }
+            free(parameters);                                   // free parameters before exiting?
         }
-        if (state == 0) {                                  // just execute command without io redirection
-            execv(instr_ptr->tokens[0], instr_ptr->tokens);
+        else if (state == 0) {                                  // just execute command without io redirection
+            if (execv(instr_ptr->tokens[0], instr_ptr->tokens) == -1) {
+                perror("Error: Command execution failed\n");
+                exit(1);
+            }
         }
     }
     else{
@@ -419,7 +511,69 @@ void executeCommand(instruction* instr_ptr){
     }
 }
 
-//checks for redirection and returns the case
+void executePipedCommand(char ** command1, char ** command2) {
+    pid_t pid1, pid2;
+    int fd_pipe[2];                 // adapt to more than 1 pipe (https://stackoverflow.com/questions/12679075/almost-perfect-c-shell-piping)
+    int status;
+
+    if (pipe(fd_pipe) < 0) {
+        perror("Error: Piping failed\n");
+        exit(1);
+    }
+
+    pid1 = fork();
+    if(pid1 < 0){
+        perror("Error: Forking failed\n");
+        exit(1);
+    }
+    /*for (int i = 0; i <= 2; i++) {
+        if ((command1)[i] != NULL) {
+            printf("%s\n", command1[i]);
+        }
+    }
+    for (int i = 0; i <= 1; i++) {
+        //if ((command2)[i] != NULL) {
+            printf("%s\n", command2[i]);
+        }
+    }*/
+    if (pid1 == 0) {
+        // 1st command (writer)
+        close(STDOUT_FILENO);
+        dup(fd_pipe[1]);
+        close(fd_pipe[0]);
+        close(fd_pipe[1]);
+
+        if (execv(command1[0], command1) == -1) {
+            perror("Error: Command execution failed\n");
+            exit(1);
+        }
+    }
+    else {
+        // 2nd command (reader)
+        pid2 = fork();
+        if (pid2 < 0) {
+            perror("Error: Forking failed\n");
+            exit(1);
+        }
+        if (pid2 == 0) {
+            close(STDOUT_FILENO);
+            dup(fd_pipe[0]);
+            close(fd_pipe[0]);
+            close(fd_pipe[1]);
+
+            if (execv(command2[0], command2) == -1) {
+                perror("Error: Command execution failed\n");
+                exit(1);
+            }
+        }
+        else {
+            waitpid(pid1, &status, 0);
+            waitpid(pid2, &status, 0);
+        }
+    }
+}
+
+// checks for redirection or piping
 int redirectionCheck(instruction* instr_ptr, int * preRedirectionSize) {
     int input_state = 0, output_state = 0;          // booleans for type of redirection state
     for (int i = 0; i < instr_ptr->numTokens; i++) {
@@ -445,20 +599,35 @@ int redirectionCheck(instruction* instr_ptr, int * preRedirectionSize) {
                 }
                 output_state = 1;
             }
+            else if (strcmp((instr_ptr->tokens)[i], "|") == 0) {
+                return 4;                                      // piping
+            }
             if (input_state == 1 && output_state == 1) {
-                return 3;                                      // input and output redirection
+                return 3;                                      // both input and output redirection
             }
         }
     }
     if (input_state == 1) {
-        return 1;
+        return 1;                                      // only input redirection
     }
     else if (output_state == 1) {
-        return 2;
+        return 2;                                      // only output redirection
     }
     if (input_state == 0 && output_state == 0) {
-        return 0;                                      // no redirection
+        return 0;                                      // no redirection or piping
     }
+}
+
+int countPipes(instruction* instr_ptr) {
+    int pipes = 0;
+    for (int i = 0; i < instr_ptr->numTokens; i++) {
+        if ((instr_ptr->tokens)[i] != NULL) {
+            if (strcmp((instr_ptr->tokens)[i], "|") == 0) {
+                pipes++;
+            }
+        }
+    }
+    return pipes;
 }
 
 char * getInputFile(instruction* instr_ptr) {
