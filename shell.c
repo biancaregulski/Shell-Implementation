@@ -61,6 +61,7 @@ int NUM_OF_PROCESSES = 0;		//Track number of running processes
 void addRunningProcess(int pid, char* cmd);	//Add pid to RUNNING_PROCESSES
 void deleteRunningProcess(int pid);	//Remove pid from RUNNING_PROCESSES
 void checkProcessQueue();
+int checkProcess(queueEntry process);
 int COMMANDS_EXECUTED;	//Track number of commands executed for exit_builtin
 
 int main() {
@@ -105,11 +106,14 @@ void parseInput(instruction* instr_ptr) {
 		scanf("%ms", &token);
 		temp = malloc(strlen(token)+1);
 
+		
 		int i;
 		int start = 0;
 		for (i = 0; i < strlen(token); i++) {
 			//pull out special characters and make them into a separate token in the instruction
 			if (token[i] == '|' || token[i] == '>' || token[i] == '<' || token[i] == '&') {
+			   
+			   
 				if (i-start > 0) {
 					memcpy(temp, token + start, i - start);
 					temp[i-start] = '\0';
@@ -121,9 +125,9 @@ void parseInput(instruction* instr_ptr) {
 				specialChar[1] = '\0';
 				addToken(instr_ptr,specialChar);
 				start = i + 1;
+			    
 			}
 		}
-
 		if (start < strlen(token)) {
 			memcpy(temp, token + start, strlen(token) - start);
 			temp[i-start] = '\0';
@@ -277,6 +281,19 @@ void expandPath(char** token) {
 
 void pathResolution(instruction* instr_ptr) {
 	
+	if(strcmp(instr_ptr->tokens[0], "&") == 0){                     //check to see if there's a & at the start of command string
+	    int i = 0;
+	    for(i; i < instr_ptr->numTokens -1; i++){
+	        if(instr_ptr->tokens[i] != NULL){
+                    memcpy(instr_ptr->tokens[i], instr_ptr->tokens[i+1], strlen(instr_ptr->tokens[i+1]));
+	        }
+	    }
+                //strcpy(instr_ptr->tokens[i], instr_ptr->tokens[i+1]);     //shift the commands so that there's no leading &
+                //instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens-1) * sizeof(char*));
+                instr_ptr->numTokens--;
+                addNull(instr_ptr);
+        }
+
 	if (instr_ptr->tokens[0][0] == '/' && pathIsFile(instr_ptr->tokens[0])) {
 		printf("Executing command %s\n",instr_ptr->tokens[0]);
 		executeCommand(instr_ptr, 0);
@@ -845,6 +862,7 @@ void jobs_builtin(instruction* instr_ptr) {
 int checkBackground(instruction* instr_ptr){				//return 1 if there's a & at the end of the command, which tells us this is background command 
     int lastToken = (instr_ptr->numTokens) - 1;
     int i;
+
     if(strcmp(instr_ptr->tokens[lastToken], "&") == 0){			//this first part of if statement awknowledges that there's background processing, but then removes the & from the cmdl line
 	free(instr_ptr->tokens[lastToken]);
         instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens-1) * sizeof(char*));
@@ -854,7 +872,6 @@ int checkBackground(instruction* instr_ptr){				//return 1 if there's a & at the
 	if(strcmp(instr_ptr->tokens[0], "&") == 0){			//check to see if there's a & at the start of command string
 
 	    memmove(instr_ptr->tokens[0], instr_ptr->tokens[1], sizeof(char*));
-	    //strcpy(instr_ptr->tokens[i], instr_ptr->tokens[i+1]);	//shift the commands so that there's no leading &
 	    instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens-1) * sizeof(char*));
 	    instr_ptr->numTokens--;
 	    addNull(instr_ptr);
@@ -896,8 +913,22 @@ void deleteRunningProcess(int pid) {
 void checkProcessQueue(){
 	int i = 0;
 	for(i; i < NUM_OF_PROCESSES; i++){
-		if(RUNNING_PROCESSES[i] != NULL){
-			
-		}
+			if(checkProcess(RUNNING_PROCESSES[i])){			//if 1 then process is finished
+				printf("[%d]+\t[%s]\n", i, RUNNING_PROCESSES[i].cmd);
+				deleteRunningProcess(RUNNING_PROCESSES[i].pid);
+
+			}
 	}
+}
+
+int checkProcess(queueEntry process){
+	int status;
+	int pid_return;
+
+	pid_return = waitpid(process.pid, &status, WNOHANG);
+
+	if(pid_return == 0)
+		return 0;
+	else
+		return 1;
 }
