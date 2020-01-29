@@ -17,69 +17,53 @@ typedef struct
 	int numTokens;
 } instruction;
 
-void parseInput(instruction* instr_ptr);			//Parses input into instruction
-void addToken(instruction* instr_ptr, char* tok);		//Adds token to instruction.tokens
-void addNull(instruction* instr_ptr);				//Adds null token to the end
-
-void expandVariables(instruction* instr_ptr);			//Expand tokens that start with $
+void parseInput(instruction* instr_ptr);			//Parsing
+void addToken(instruction* instr_ptr, char* tok);
+void addNull(instruction* instr_ptr);
 
 void shortcutResolution(instruction* instr_ptr);		//Shortcut Resolution
-void expandPath(char** token);					//Expand shortcuts
+void expandVariable(char** token);
 
-void pathResolution(instruction* instr_ptr);			//Path resolution
+void pathResolution(instruction* instr_ptr);				//Path resolution
 
-void executeCommand(instruction* instr_ptr);
-void executePipedCommand(char ** command1, char ** command2, char ** command3);
-
+void executeCommand(instruction* instr_ptr, int withBackground);	//withBackground = 0 when there's no background process, 1 when there is 
+void executePipedCommand(char ** command1, char ** command2);
+void executeBackgroundCommand(instruction* instr_ptr);
 int redirectionCheck(instruction* instr_ptr, int * preRedirectionSize);
-char * getInputFile(instruction* instr_ptr);
-char * getOutputFile(instruction* instr_ptr);
 int countPipes(instruction* instr_ptr);
 
-int pathExists(const char* path);			//Test if a path is valid. 1 = True, 0 = False
-int pathIsFile(const char* path);			//Test if path is a file
-int pathIsDir(const char* path);			//Test if path is a directory
+char * getInputFile(instruction* instr_ptr);
+char * getOutputFile(instruction* instr_ptr);
 
-int checkBuiltIn(instruction* instr_ptr);		//Check Built Ins
-void exit_builtin(instruction* instr_ptr);		//1. Exit shell
-void cd_builtin(instruction* instr_ptr);		//2. Change Directory
-void echo_builtin(instruction* instr_ptr);		//3. Print tokens
-void jobs_builtin(instruction* instr_ptr);		//4. Print current background processes
+void printTokens(instruction* instr_ptr);			//Output tokens
+void clearInstruction(instruction* instr_ptr);			//Clear Instruction
 
-void clearInstruction(instruction* instr_ptr);		//Clear Instruction
-
-int* RUNNING_PROCESSES;			//Track pid's of running processes for jobs_builtin
-int NUM_OF_PROCESSES = 0;		//Track number of running processes
-void addRunningProcess(int pid);	//Add pid to RUNNING_PROCESSES
-void deleteRunningProcess(int pid);	//Remove pid from RUNNING_PROCESSES
-
-int COMMANDS_EXECUTED;	//Track number of commands executed for exit_builtin
+int checkBackground(instruction* instr_ptr);
+int pathExists(const char* path);				//Test if a path is valid
+int pathIsFile(const char* path);
+int pathIsDir(const char* path);
 
 int main() {
+	char* exit = "exit";
+
 	instruction instr;
 	instr.tokens = NULL;
 	instr.numTokens = 0;
-	
+
 	while(1) {
 		printf("%s@%s:%s>", getenv("USER"), getenv("MACHINE"), getenv("PWD"));	//PROMPT
 
 		//Parse instruction
 		parseInput(&instr);
-		
-		//Expand Variables
-		expandVariables(&instr);
-		
-		//Check for built in		
-		//if no built in, check for command
-		if(!checkBuiltIn(&instr)) {
-			shortcutResolution(&instr);
-			pathResolution(&instr);
-		}
+
+		//Shortcut resolution
+		shortcutResolution(&instr);
+
+		//Output tokens
+		//printTokens(&instr);
 
 		//Clear instruction
 		clearInstruction(&instr);
-		
-		++COMMANDS_EXECUTED;
 	}
 
 	return 0;
@@ -134,7 +118,8 @@ void parseInput(instruction* instr_ptr) {
 
 //reallocates instruction array to hold another token
 //allocates for new token within instruction array
-void addToken(instruction* instr_ptr, char* tok){
+void addToken(instruction* instr_ptr, char* tok)
+{
 	//extend token array to accomodate an additional token
 	if (instr_ptr->numTokens == 0)
 		instr_ptr->tokens = (char**) malloc(sizeof(char*));
@@ -148,7 +133,8 @@ void addToken(instruction* instr_ptr, char* tok){
 	instr_ptr->numTokens++;
 }
 
-void addNull(instruction* instr_ptr){
+void addNull(instruction* instr_ptr)
+{
 	//extend token array to accomodate an additional token
 	if (instr_ptr->numTokens == 0)
 		instr_ptr->tokens = (char**)malloc(sizeof(char*));
@@ -160,119 +146,105 @@ void addNull(instruction* instr_ptr){
 	//instr_ptr->numTokens++; <-----Why increment the number of tokens for a null token
 }
 
-void expandVariables(instruction* instr_ptr) {
-	int i;
-	char* temp;
-	for(i = 0; i < instr_ptr->numTokens; i++)
-	{
-		if(instr_ptr->tokens[i][0] == '$')
-		{
-			temp = malloc(strlen(instr_ptr->tokens[i]));
-			memcpy(temp, &instr_ptr->tokens[i][1], strlen(instr_ptr->tokens[i]));
-			char* envar = getenv(temp);
-			if(envar != NULL) {
-				instr_ptr->tokens[i] = realloc(instr_ptr->tokens[i], strlen(envar)+1);
-				strcpy(instr_ptr->tokens[i], envar);
-			}
-			else {
-				printf("Variable %s does not exist\n",temp);
-				instr_ptr->tokens[i] = realloc(instr_ptr->tokens[i], 1);
-				strcpy(instr_ptr->tokens[i], "");
-			}
-			free(temp);
-		}
-	}
-}
-
-void shortcutResolution(instruction* instr_ptr){
+void shortcutResolution(instruction* instr_ptr)
+{
 	int i,j;
-	
+	int count = 0;
+
 	const char* pwd = getenv("PWD");
 	const char* home = getenv("HOME");
-	
 	char* temp;
-	
-	for(i = 0; i < instr_ptr->numTokens; ++i)
+
+	for(i = 0; i < instr_ptr->numTokens; i++)
 	{
-		//Do not convert if token is special symbol
-		if(
-		instr_ptr->tokens[i][0] == '|' || 
-		instr_ptr->tokens[i][0] == '>' || 
-		instr_ptr->tokens[i][0] == '<' || 
-		instr_ptr->tokens[i][0] == '&') 
-		continue;
-		
+		//Expand variable token
+		if(instr_ptr->tokens[i][0] == '$')
+		{
+			expandVariable(&instr_ptr->tokens[i]);
+			continue;
+		}
+	}
+
+	// prefix executable command paths
+	pathResolution(instr_ptr);
+
+	for(i = 0; i < instr_ptr->numTokens; i++)
+	{
 		//Do not convert if token is an absolute path
 		if(instr_ptr->tokens[i][0] == '/') continue;
 
-		for(j = 0; j < strlen(instr_ptr->tokens[i]); ++j)
+		for(j = 0; j < strlen(instr_ptr->tokens[i]); j++)
 		{
-			if(instr_ptr->tokens[i][j] == '/'){
-				expandPath(&instr_ptr->tokens[i]);
-				break;
+			if((instr_ptr->tokens)[i][j] == '/')
+			{
+				//A slash is found, token is a relative path
+
+				//If the token starts with '~', replace with $HOME
+				if(instr_ptr->tokens[i][0] == '~')
+				{
+					temp = malloc(strlen(home)+strlen(instr_ptr->tokens[i])+2);
+					strcpy(temp, home);
+					strcat(temp, &instr_ptr->tokens[i][1]);
+					instr_ptr->tokens[i] = realloc(instr_ptr->tokens[i], strlen(temp)+1);
+					strcpy(instr_ptr->tokens[i], temp);
+					free(temp);
+					temp = NULL;
+					break;
+				}
+
+				//Otherwise, expand relative directory into absolute directory
+				else
+				{
+					temp = malloc(strlen(pwd)+strlen(instr_ptr->tokens[i])+2);
+					strcpy(temp, pwd);
+					strcat(temp, "/");
+					strcat(temp, instr_ptr->tokens[i]);
+					instr_ptr->tokens[i] = realloc(instr_ptr->tokens[i], strlen(temp)+1);
+					strcpy(instr_ptr->tokens[i], temp);
+					free(temp);
+					temp = NULL;
+					break;
+				}
 			}
+		}
+	}
+
+	//After expanding tokens as directories, replace dot shortcuts
+	for(i = 0; i < instr_ptr->numTokens; i++)
+	{
+		//Replace double dot first since single dot is a substring
+		//Removed the directory before the double dot
+		if((temp = strstr(instr_ptr->tokens[i], "/..")) != NULL)
+		{
+			char* temp2 = &temp[3];
+			--temp;
+			while(*temp != '/'){--temp;};
+			memmove(temp, temp2, strlen(temp2)+1);
+		}
+
+		//Simply remove all instances of single dot
+		if((temp = strstr(instr_ptr->tokens[i], "/.")) != NULL)
+		{
+			memmove(temp, &temp[2], strlen(temp)-1);
 		}
 	}
 }
 
-void expandPath(char** token) {
-
-	const char* pwd = getenv("PWD");
-	const char* home = getenv("HOME");
-
-	char* temp;
-	
-	//If the token starts with '~', replace with $HOME
-	if(*token[0] == '~')
-	{
-		temp = malloc(strlen(home)+strlen(*token)+2);
-		strcpy(temp, home);
-		strcat(temp, &token[0][1]);
-		*token = realloc(*token, strlen(temp)+1);
-		strcpy(*token, temp);
-		free(temp);
-		temp = NULL;
+void expandVariable(char** token) {
+	char* temp = malloc(strlen(*token));
+	memcpy(temp, &token[0][1], strlen(*token));
+	char* envar = getenv(temp);
+	if(envar != NULL) {
+		*token = realloc(*token, strlen(envar)+1);
+		strcpy(*token, envar);
 	}
-
-	//Otherwise, expand relative directory into absolute directory
-	else
-	{
-		temp = malloc(strlen(pwd)+strlen(*token)+2);
-		strcpy(temp, pwd);
-		strcat(temp, "/");
-		strcat(temp, *token);
-		*token = realloc(*token, strlen(temp)+1);
-		strcpy(*token, temp);
-		free(temp);
-		temp = NULL;
+	else {
+		*token = realloc(*token, 7);
+		strcpy(*token, "(null)");
 	}
-	
-	//After expanding tokens as directories, replace dot shortcuts
-	//Replace double dot first since single dot is a substring
-	//Removed the directory before the double dot
-	if((temp = strstr(*token, "/..")) != NULL)
-	{
-		char* temp2 = &temp[3];
-		--temp;
-		while(*temp != '/'){--temp;};
-		memmove(temp, temp2, strlen(temp2)+1);
-	}
-
-	//Simply remove all instances of single dot
-	if((temp = strstr(*token, "/.")) != NULL)
-	{
-		memmove(temp, &temp[2], strlen(temp)-1);
-	}
-	
 }
 
 void pathResolution(instruction* instr_ptr) {
-	
-	if (instr_ptr->tokens[0][0] == '/' && pathIsFile(instr_ptr->tokens[0])) {
-		printf("Executing command %s\n",instr_ptr->tokens[0]);
-		executeCommand(instr_ptr);
-		return;
-	}
 
 	int i = 0, j = 0;
 
@@ -281,9 +253,11 @@ void pathResolution(instruction* instr_ptr) {
 	const char* path = getenv("PATH");
 
 	char* envpath = malloc(strlen(path)+1);
-    strcpy(envpath, path);
+    	strcpy(envpath, path);
 
 	char* path_split;
+
+	int backgroundFlag = checkBackground(instr_ptr);
 
 
     for (int i = 0; i < instr_ptr->numTokens; i++) {
@@ -306,9 +280,6 @@ void pathResolution(instruction* instr_ptr) {
                     path_split = strtok(NULL, ":");
 
                 }
-				
-				free(envpath);
-				
                 //Check if the program exists in each directory
                 //If it does, execute it
                 for(int k = 0; k < j; ++k) {
@@ -334,25 +305,30 @@ void pathResolution(instruction* instr_ptr) {
                         for(k = 0; k < j; ++k) {
                             free(checkpaths[k]);
                         }
+                        free(envpath);
                         return;
                     }
                 }
             }
-        }
+        } 
     }
-    executeCommand(instr_ptr);
+    free(envpath);
+
+    executeCommand(instr_ptr, backgroundFlag);
 }
 
-void printTokens(instruction* instr_ptr){
+void printTokens(instruction* instr_ptr)
+{
 	int i;
-	for (i = 1; i < instr_ptr->numTokens; i++) {
+	printf("Tokens:\n");
+	for (i = 0; i < instr_ptr->numTokens; i++) {
 		if ((instr_ptr->tokens)[i] != NULL)
-		printf("%s ", (instr_ptr->tokens)[i]);
+		printf("%s\n", (instr_ptr->tokens)[i]);
 	}
-	printf("\n");
 }
 
-void clearInstruction(instruction* instr_ptr){
+void clearInstruction(instruction* instr_ptr)
+{
 	int i;
 	for (i = 0; i < instr_ptr->numTokens; i++)
 		free(instr_ptr->tokens[i]);
@@ -386,18 +362,45 @@ int pathIsDir(const char* path) {
 	else return 0;
 }
 
-void executeCommand(instruction* instr_ptr){
+int checkBackground(instruction* instr_ptr){				//return 1 if there's a & at the end of the command, which tells us this is background command 
+    int lastToken = (instr_ptr->numTokens) - 1;
+    int i;
+    if(strcmp(instr_ptr->tokens[lastToken], "&") == 0){			//this first part of if statement awknowledges that there's background processing, but then removes the & from the cmdl line
+	free(instr_ptr->tokens[lastToken]);
+        instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens-1) * sizeof(char*));
+	instr_ptr->numTokens--;
+	addNull(instr_ptr);
+
+	if(strcmp(instr_ptr->tokens[0], "&") == 0){			//check to see if there's a & at the start of command string
+
+	    memmove(instr_ptr->tokens[0], instr_ptr->tokens[1], sizeof(char*));
+	    //strcpy(instr_ptr->tokens[i], instr_ptr->tokens[i+1]);	//shift the commands so that there's no leading &
+	    instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens-1) * sizeof(char*));
+	    instr_ptr->numTokens--;
+	    addNull(instr_ptr);
+	}
+	return 1;
+    }
+    else
+        return 0;
+}
+
+void executeBackgroundCommand(instruction* instr_ptr){
+    
+}
+void executeCommand(instruction* instr_ptr, int withBackground){
+    int runBackground = withBackground;
+
     int fd_in;
     int fd_out;
 
     char *inputFile, *outputFile;
     int preRedirectionSize = -1;
     int numPipes;
-    int state = redirectionCheck(instr_ptr, &preRedirectionSize);
-    if (state == 4) {
-        numPipes = countPipes(instr_ptr);
-    }
-
+    int state = redirectionCheck(instr_ptr, &preRedirectionSize);			//1 input redirection
+    if (state == 4) {									//2 output redirection
+        numPipes = countPipes(instr_ptr);						//3 both
+    }											//4 piping
     if (state == -1) {
         perror("Error: Invalid syntax\n");
         exit(1);
@@ -411,7 +414,7 @@ void executeCommand(instruction* instr_ptr){
         if( access( inputFile, F_OK ) == -1 ) {             // file does not exist
             perror("Error: Input file does not exist\n");
             //exit(1);
-            return;
+			return;
         }
 
         fd_in = open(inputFile, O_RDONLY);
@@ -431,43 +434,43 @@ void executeCommand(instruction* instr_ptr){
 
     else if (state == 4) {
         // piping for child process
-
+        
         // indexes of which tokens are pipes
         int * pipeIndex = calloc(numPipes + 1, sizeof(int));        // is + 1 needed or not?
-        int numPipes = 0;
+        int j = 0;
         for (int i = 0; i < instr_ptr->numTokens; i++) {
             if ((instr_ptr->tokens)[i] != NULL) {
                 if (strcmp((instr_ptr->tokens)[i], "|") == 0) {
-                    pipeIndex[numPipes] = i;
-                    numPipes++;
+                    pipeIndex[j] = i;
+                    j++;
                 }
             }
         }
 
-        int numCommandTokens[3];
-        numCommandTokens[0] = pipeIndex[0];
-        char **command1 = (char **) malloc((numCommandTokens[0] + 1) * sizeof(char *));
+        int numCommand1Tokens = pipeIndex[0];
+        char **command1 = (char **) malloc((numCommand1Tokens + 1) * sizeof(char *));
         // put tokens before first pipe in the command1 array
-        for (int i = 0; i < numCommandTokens[0]; i++) {
+        for (int i = 0; i < numCommand1Tokens; i++) {
             if ((instr_ptr->tokens)[i] != NULL) {
                 command1[i] = malloc(strlen((instr_ptr->tokens)[i] + 1));
                 strcpy(command1[i], instr_ptr->tokens[i]);
             }
         }
 
-        command1[numCommandTokens[0]] = NULL;       // set last index of command1 to null
+        command1[numCommand1Tokens] = NULL;
+        /*printf("%d\n", numCommand1Tokens);
 
-        int startingIndex;
-        startingIndex = pipeIndex[0] + 1;
-        if (numPipes < 2) {
-            numCommandTokens[1] = instr_ptr->numTokens - numCommandTokens[0] - 1;
-        }
-        else {
-            numCommandTokens[1] = pipeIndex[1] - startingIndex;
-        }
-        char **command2 = (char **) malloc((numCommandTokens[1] + 1) * sizeof(char *));
+         for (int i = 0; i < numCommand1Tokens; i++) {
+            if ((command1)[i] != NULL) {
+                printf("%s\n", command1[i]);
+            }
+        }*/
+
+        int numCommand2Tokens = instr_ptr->numTokens - numCommand1Tokens - 1;
+        int startingIndex = pipeIndex[0] + 1;
+        char **command2 = (char **) malloc((numCommand2Tokens + 1) * sizeof(char *));
         int k = 0;
-        for (int i = startingIndex; i < startingIndex + numCommandTokens[1]; i++) {
+        for (int i = startingIndex; i < startingIndex + numCommand2Tokens; i++) {
             if ((instr_ptr->tokens)[i] != NULL) {
                 command2[k] = malloc(strlen((instr_ptr->tokens)[i] + 1));
                 strcpy(command2[k], instr_ptr->tokens[i]);
@@ -475,36 +478,17 @@ void executeCommand(instruction* instr_ptr){
             }
         }
 
-        command2[numCommandTokens[1]] = NULL;       // set last index of command2 to null
+        command2[numCommand2Tokens] = NULL;
 
-        char **command3;
-        if (numPipes > 1) {
-            startingIndex = pipeIndex[1] + 1;
-            numCommandTokens[2] = instr_ptr->numTokens - startingIndex;
-            command3 = (char **) malloc((numCommandTokens[2] + 1) * sizeof(char *));
-            int k = 0;
-            for (int i = startingIndex; i < startingIndex + numCommandTokens[2]; i++) {
-                if ((instr_ptr->tokens)[i] != NULL) {
-                    command3[k] = malloc(strlen((instr_ptr->tokens)[i] + 1));
-                    strcpy(command3[k], instr_ptr->tokens[i]);
-                    k++;
-                }
+        /*for (int i = 0; i < numCommand2Tokens; i++) {
+            if ((command2)[i] != NULL) {
+                printf("%s\n", command2[i]);
             }
-            command3[numCommandTokens[2]] = NULL;       // set last index of command3 to null
-        }
-        else {
-            command3 = NULL;
-        }
-
-
-        executePipedCommand(command1, command2, command3);
+        }*/
+        executePipedCommand(command1, command2);
         free(command1);
         free(command2);
-        if (numPipes > 2) {
-            free(command3);
-        }
         free(pipeIndex);
-	return;
     }
 
     pid_t pid = fork();
@@ -554,15 +538,19 @@ void executeCommand(instruction* instr_ptr){
         }
     }
     else{
-        //parent
-        waitpid(pid, &status, 0);
+	if(runBackground == 0){
+            //parent
+            waitpid(pid, &status, 0);
+        }
+	else{						//run in the background
+	    waitpid(pid, &status, WNOHANG);
+	}
     }
 }
 
-void executePipedCommand(char ** command1, char ** command2, char ** command3) {
-    pid_t pid1, pid2, pid3;
-    int fd_pipe[2];
-    int fd_pipe2[2];
+void executePipedCommand(char ** command1, char ** command2) {
+    pid_t pid1, pid2;
+    int fd_pipe[2];                 // adapt to more than 1 pipe (https://stackoverflow.com/questions/12679075/almost-perfect-c-shell-piping)
     int status;
 
     if (pipe(fd_pipe) < 0) {
@@ -575,83 +563,51 @@ void executePipedCommand(char ** command1, char ** command2, char ** command3) {
         perror("Error: Forking failed\n");
         exit(1);
     }
-    else if (pid1 == 0) {
+    /*for (int i = 0; i <= 2; i++) {
+        if ((command1)[i] != NULL) {
+            printf("%s\n", command1[i]);
+        }
+    }
+    for (int i = 0; i <= 1; i++) {
+        //if ((command2)[i] != NULL) {
+            printf("%s\n", command2[i]);
+        }
+    }*/
+    if (pid1 == 0) {
         // 1st command (writer)
-
-        // output to pipe1
         close(STDOUT_FILENO);
         dup(fd_pipe[1]);
         close(fd_pipe[0]);
         close(fd_pipe[1]);
 
         if (execv(command1[0], command1) == -1) {
-            perror("Error: Command 1 execution failed\n");
+            perror("Error: Command execution failed\n");
             exit(1);
         }
     }
     else {
-        if ( command3 != NULL) {
-            if (pipe(fd_pipe2) < 0) {
-                perror("Error: Piping failed\n");
-                exit(1);
-            }
-        }
+        // 2nd command (reader)
         pid2 = fork();
-        if(pid2 < 0){
+        if (pid2 < 0) {
             perror("Error: Forking failed\n");
             exit(1);
         }
-        else if (pid2 == 0) {
-            // input from pipe1
-            close(STDIN_FILENO);
+        if (pid2 == 0) {
+            close(STDOUT_FILENO);
             dup(fd_pipe[0]);
             close(fd_pipe[0]);
             close(fd_pipe[1]);
-            if (command3 != NULL) {
-                // output to pipe2
-                close(STDOUT_FILENO);
-                dup(fd_pipe2[1]);
-                close(fd_pipe2[0]);
-                close(fd_pipe2[1]);
-            }
 
             if (execv(command2[0], command2) == -1) {
-                perror("Error: Command 2 execution failed\n");
+                perror("Error: Command execution failed\n");
                 exit(1);
             }
         }
         else {
-            close(fd_pipe[0]);
-            close(fd_pipe[1]);
+            waitpid(pid1, &status, 0);
             waitpid(pid2, &status, 0);
-            if (command3 != NULL) {
-                pid3 = fork();
-                if (pid3 < 0) {
-                    perror("Error: Forking failed\n");
-                    exit(1);
-                }
-                else if (pid3 == 0) {
-                    // input from pipe2
-                    close(STDIN_FILENO);
-                    dup(fd_pipe2[0]);
-                    close(fd_pipe2[0]);
-                    close(fd_pipe2[1]);
-                    if (execv(command3[0], command3) == -1) {
-                        perror("Error: Command 3 execution failed\n");
-                        exit(1);
-                    }
-                }
-                else {
-                    close(fd_pipe2[0]);
-                    close(fd_pipe2[1]);
-                    waitpid(pid3, &status, 0);
-                }
-            }
         }
-
     }
-
-
 }
 
 // checks for redirection or piping
@@ -731,107 +687,4 @@ char * getOutputFile(instruction* instr_ptr) {
             return outputFile;
         }
     }
-}
-
-int checkBuiltIn(instruction* instr_ptr) {
-		char* first = instr_ptr->tokens[0];
-		if(strcmp(first, "exit")==0) {
-			printf("Exiting now!\nCommands Executed: %d\n",COMMANDS_EXECUTED);
-			exit_builtin(instr_ptr);
-			return 1;
-		}
-		else if(strcmp(first, "cd")==0) {
-			cd_builtin(instr_ptr);
-			return 2;
-		}
-		else if(strcmp(first, "echo")==0) {
-			echo_builtin(instr_ptr);
-			return 3;
-		}
-		else if(strcmp(first, "jobs")==0) {
-			jobs_builtin(instr_ptr);
-			return 4;
-		}
-		else {
-			return 0;
-		}
-}
-
-void exit_builtin(instruction* instr_ptr) {
-	int status;
-	while(NUM_OF_PROCESSES>0) {
-		waitpid(RUNNING_PROCESSES[0], &status, 0);
-		deleteRunningProcess(RUNNING_PROCESSES[0]);
-	};
-	free(RUNNING_PROCESSES);
-	exit(1);
-}
-
-void cd_builtin(instruction* instr_ptr) {
-			
-	if(instr_ptr->numTokens > 2) {
-		printf("cd : Too many arguments\n");
-		return;
-	}
-	
-	if(instr_ptr->numTokens == 1) {
-		//No arguments, go to $HOME
-		char* home = getenv("HOME");
-		chdir(home);
-		setenv("PWD", home, 1);
-		return;
-	}
-	
-	if(pathIsDir(instr_ptr->tokens[1])) {
-		//Go to directory in second token
-		expandPath(&instr_ptr->tokens[1]);
-		chdir(instr_ptr->tokens[1]);
-		setenv("PWD", instr_ptr->tokens[1], 1);
-		return;
-	}
-	
-	else if(pathIsFile(instr_ptr->tokens[1])) printf("cd : %s is a file\n",instr_ptr->tokens[1]);
-	
-	else printf("cd : No directory found at %s\n",instr_ptr->tokens[1]);
-}
-
-void echo_builtin(instruction* instr_ptr) {
-	int i;
-	for (i = 1; i < instr_ptr->numTokens; i++) {
-		if ((instr_ptr->tokens)[i] != NULL)
-		printf("%s ", (instr_ptr->tokens)[i]);
-	}
-	printf("\n");
-}
-
-void jobs_builtin(instruction* instr_ptr) {
-	for(int i = 0; i < NUM_OF_PROCESSES; ++i) {
-		printf("%d\n",RUNNING_PROCESSES[i]);
-	}
-}
-
-void addRunningProcess(int pid) {
-	if(RUNNING_PROCESSES == NULL) {
-		RUNNING_PROCESSES = malloc(sizeof(int));
-		RUNNING_PROCESSES[0] = pid;
-		NUM_OF_PROCESSES = 1;
-	}
-	else {
-		RUNNING_PROCESSES = realloc(RUNNING_PROCESSES, sizeof(int)*NUM_OF_PROCESSES+1);
-		RUNNING_PROCESSES[NUM_OF_PROCESSES] = pid;
-		++NUM_OF_PROCESSES;
-	}
-}
-
-void deleteRunningProcess(int pid) {
-	int i, j = 0;
-	for(i = 0; i < NUM_OF_PROCESSES; ++i) {
-		if(RUNNING_PROCESSES[i] == pid) continue;
-		else {
-			RUNNING_PROCESSES[j] = RUNNING_PROCESSES[i];
-			++j;
-		}
-	}
-	--NUM_OF_PROCESSES;
-	RUNNING_PROCESSES = realloc(RUNNING_PROCESSES, NUM_OF_PROCESSES*sizeof(int));
 }
