@@ -1,4 +1,4 @@
-//COP4610
+ //COP4610
 //Project 1 Starter Code
 //example code for initial parsing
 
@@ -28,9 +28,9 @@ void expandPath(char** token);					//Expand shortcuts
 
 void pathResolution(instruction* instr_ptr);			//Path resolution
 
-void executeCommand(instruction* instr_ptr, int withBackground);	//withBackground = 0 when there's no background process, 1 when there is 
-void executePipedCommand(char ** command1, char ** command2, char ** command3);
-
+void prepareExecution(instruction* instr_ptr, int builtInType, int withBackground);	//withBackground = 0 when there's no background process, 1 when there is 
+void executeNonpipedCommand(instruction* instr_ptr, int state, int * preRedirectionSize);
+void executePipedCommand(instruction * instr_ptr, char ** command1, char ** command2, char ** command3, int builtInType);
 int redirectionCheck(instruction* instr_ptr, int * preRedirectionSize);
 char * getInputFile(instruction* instr_ptr);
 char * getOutputFile(instruction* instr_ptr);
@@ -41,6 +41,7 @@ int pathIsFile(const char* path);			//Test if path is a file
 int pathIsDir(const char* path);			//Test if path is a directory
 
 int checkBuiltIn(instruction* instr_ptr);		//Check Built Ins
+void runBuiltIn(instruction* instr_ptr, int id);
 void exit_builtin(instruction* instr_ptr);		//1. Exit shell
 void cd_builtin(instruction* instr_ptr);		//2. Change Directory
 void echo_builtin(instruction* instr_ptr);		//3. Print tokens
@@ -272,7 +273,7 @@ void pathResolution(instruction* instr_ptr) {
 	
 	if (instr_ptr->tokens[0][0] == '/' && pathIsFile(instr_ptr->tokens[0])) {
 		printf("Executing command %s\n",instr_ptr->tokens[0]);
-		executeCommand(instr_ptr, 0);
+		prepareExecution(instr_ptr, 0, 0);
 		return;
 	}
 
@@ -308,10 +309,7 @@ void pathResolution(instruction* instr_ptr) {
                     }
                     path_split = strtok(NULL, ":");
 
-                }
-				
-				free(envpath);
-				
+                }				
                 //Check if the program exists in each directory
                 //If it does, execute it
                 for(int k = 0; k < j; ++k) {
@@ -343,16 +341,8 @@ void pathResolution(instruction* instr_ptr) {
             }
         }
     }
-    executeCommand(instr_ptr, backgroundFlag);
-}
-
-void printTokens(instruction* instr_ptr){
-	int i;
-	for (i = 1; i < instr_ptr->numTokens; i++) {
-		if ((instr_ptr->tokens)[i] != NULL)
-		printf("%s ", (instr_ptr->tokens)[i]);
-	}
-	printf("\n");
+	free(envpath);
+    prepareExecution(instr_ptr, 0, backgroundFlag);
 }
 
 void clearInstruction(instruction* instr_ptr){
@@ -389,7 +379,7 @@ int pathIsDir(const char* path) {
 	else return 0;
 }
 
-void executeCommand(instruction* instr_ptr, int withBackground){
+void prepareExecution(instruction* instr_ptr, int builtInType, int withBackground){ 
     int fd_in;
     int fd_out;
 
@@ -450,16 +440,21 @@ void executeCommand(instruction* instr_ptr, int withBackground){
         int numCommandTokens[3];
         numCommandTokens[0] = pipeIndex[0];
         char **command1 = (char **) malloc((numCommandTokens[0] + 1) * sizeof(char *));
-        // put tokens before first pipe in the command1 array
-        for (int i = 0; i < numCommandTokens[0]; i++) {
-            if ((instr_ptr->tokens)[i] != NULL) {
-                command1[i] = malloc(strlen((instr_ptr->tokens)[i] + 1));
-                strcpy(command1[i], instr_ptr->tokens[i]);
+        if (builtInType == 0) {
+            // put tokens before first pipe in the command1 array
+            for (int i = 0; i < numCommandTokens[0]; i++) {
+                if ((instr_ptr->tokens)[i] != NULL) {
+                    command1[i] = malloc(strlen((instr_ptr->tokens)[i] + 1));
+                    strcpy(command1[i], instr_ptr->tokens[i]);
+                }
             }
+
+            command1[numCommandTokens[0]] = NULL;       // set last index of command1 to null
         }
-
-        command1[numCommandTokens[0]] = NULL;       // set last index of command1 to null
-
+        else {
+            command1 = NULL;
+        }
+		
         int startingIndex;
         startingIndex = pipeIndex[0] + 1;
         if (numPipes < 2) {
@@ -500,7 +495,7 @@ void executeCommand(instruction* instr_ptr, int withBackground){
         }
 
 
-        executePipedCommand(command1, command2, command3);
+        executePipedCommand(instr_ptr, command1, command2, command3, builtInType);
         free(command1);
         free(command2);
         if (numPipes > 2) {
@@ -508,6 +503,11 @@ void executeCommand(instruction* instr_ptr, int withBackground){
         }
         free(pipeIndex);
 	return;
+    }
+	
+	if (builtInType > 0 && state == 0) {
+        runBuiltIn(instr_ptr, builtInType);
+        return;
     }
 
     pid_t pid = fork();
@@ -533,27 +533,13 @@ void executeCommand(instruction* instr_ptr, int withBackground){
             dup(fd_out);
             close(fd_out);
         }
-        if (state > 0 && state < 4) {
-            // execution for input and/or output redirection
-            char **parameters = (char **) malloc((preRedirectionSize + 1) * sizeof(char *));
-            for (int i = 0; i < preRedirectionSize; i++) {
-                if ((instr_ptr->tokens)[i] != NULL) {
-                    parameters[i] = malloc(strlen((instr_ptr->tokens)[i] + 1));
-                    strcpy(parameters[i], instr_ptr->tokens[i]);
-                }
-            }
-            parameters[preRedirectionSize] = NULL;
-            if (execv(parameters[0], parameters) == -1) {
-                perror("Error: Command execution failed\n");
-                exit(1);
-            }
-            free(parameters);                                   // free parameters before exiting?
+        if (builtInType == 0) {
+            executeNonpipedCommand(instr_ptr, state, &preRedirectionSize);
+            exit(1);
         }
-        else if (state == 0) {                                  // just execute command without io redirection
-            if (execv(instr_ptr->tokens[0], instr_ptr->tokens) == -1) {
-                perror("Error: Command execution failed\n");
-                exit(1);
-            }
+        else {
+            runBuiltIn(instr_ptr, builtInType);
+            exit(1);
         }
     }
     else{
@@ -567,7 +553,32 @@ void executeCommand(instruction* instr_ptr, int withBackground){
     }
 }
 
-void executePipedCommand(char ** command1, char ** command2, char ** command3) {
+void executeNonpipedCommand(instruction* instr_ptr, int state, int * preRedirectionSize) {
+    if (state > 0) {
+        // execution for input and/or output redirection
+        char **parameters = (char **) malloc((*preRedirectionSize + 1) * sizeof(char *));
+        for (int i = 0; i < *preRedirectionSize; i++) {
+            if ((instr_ptr->tokens)[i] != NULL) {
+                parameters[i] = malloc(strlen((instr_ptr->tokens)[i] + 1));
+                strcpy(parameters[i], instr_ptr->tokens[i]);
+            }
+        }
+        parameters[*preRedirectionSize] = NULL;
+        if (execv(parameters[0], parameters) == -1) {
+            perror("Error: Command execution failed\n");
+            exit(1);
+        }
+        free(parameters);
+    }
+    else if (state == 0) {                                  // just execute command without io redirection
+        if (execv(instr_ptr->tokens[0], instr_ptr->tokens) == -1) {
+            perror("Error: Command execution failed\n");
+            exit(1);
+        }
+    }
+}
+
+void executePipedCommand(instruction * instr_ptr, char ** command1, char ** command2, char ** command3, int builtInType) {
     pid_t pid1, pid2, pid3;
     int fd_pipe[2];
     int fd_pipe2[2];
@@ -579,7 +590,7 @@ void executePipedCommand(char ** command1, char ** command2, char ** command3) {
     }
 
     pid1 = fork();
-    if(pid1 < 0){
+    if(pid1 == -1){
         perror("Error: Forking failed\n");
         exit(1);
     }
@@ -592,8 +603,14 @@ void executePipedCommand(char ** command1, char ** command2, char ** command3) {
         close(fd_pipe[0]);
         close(fd_pipe[1]);
 
-        if (execv(command1[0], command1) == -1) {
-            perror("Error: Command 1 execution failed\n");
+        if (builtInType == 0) {
+            if (execv(command1[0], command1) == -1) {
+                perror("Error: Command 1 execution failed\n");
+                exit(1);
+            }
+        }
+        else {
+            runBuiltIn(instr_ptr, builtInType);
             exit(1);
         }
     }
@@ -658,8 +675,6 @@ void executePipedCommand(char ** command1, char ** command2, char ** command3) {
         }
 
     }
-
-
 }
 
 // checks for redirection or piping
@@ -742,27 +757,45 @@ char * getOutputFile(instruction* instr_ptr) {
 }
 
 int checkBuiltIn(instruction* instr_ptr) {
-		char* first = instr_ptr->tokens[0];
-		if(strcmp(first, "exit")==0) {
-			printf("Exiting now!\nCommands Executed: %d\n",COMMANDS_EXECUTED);
-			exit_builtin(instr_ptr);
-			return 1;
-		}
-		else if(strcmp(first, "cd")==0) {
-			cd_builtin(instr_ptr);
-			return 2;
-		}
-		else if(strcmp(first, "echo")==0) {
-			echo_builtin(instr_ptr);
-			return 3;
-		}
-		else if(strcmp(first, "jobs")==0) {
-			jobs_builtin(instr_ptr);
-			return 4;
-		}
-		else {
-			return 0;
-		}
+    char* first = instr_ptr->tokens[0];
+
+    if(strcmp(first, "exit")==0) {
+        prepareExecution(instr_ptr, 1, 0);
+        return 1;
+    }
+    else if(strcmp(first, "cd")==0) {
+        prepareExecution(instr_ptr, 2, 0);
+        return 2;
+    }
+    else if(strcmp(first, "echo")==0) {
+        prepareExecution(instr_ptr, 3, 0);
+        return 3;
+    }
+    else if(strcmp(first, "jobs")==0) {
+        prepareExecution(instr_ptr, 4, 0);
+        return 4;
+    }
+    else {
+        return 0;
+    }
+}
+
+void runBuiltIn(instruction* instr_ptr, int id) {
+    switch(id) {
+        case 1:
+            printf("Exiting now!\nCommands Executed: %d\n",COMMANDS_EXECUTED);
+            exit_builtin(instr_ptr);
+            break;
+        case 2:
+            cd_builtin(instr_ptr);
+            break;
+        case 3:
+            echo_builtin(instr_ptr);
+            break;
+        case 4:
+            jobs_builtin(instr_ptr);
+            break;
+    }
 }
 
 void exit_builtin(instruction* instr_ptr) {
@@ -806,8 +839,14 @@ void cd_builtin(instruction* instr_ptr) {
 void echo_builtin(instruction* instr_ptr) {
 	int i;
 	for (i = 1; i < instr_ptr->numTokens; i++) {
-		if ((instr_ptr->tokens)[i] != NULL)
+		if ((instr_ptr->tokens)[i] != NULL) {
+			if (strcmp((instr_ptr->tokens)[i], "<") == 0 || 
+				strcmp((instr_ptr->tokens)[i], ">") == 0 || 
+				strcmp((instr_ptr->tokens)[i], "|") == 0) {
+              break;
+		}
 		printf("%s ", (instr_ptr->tokens)[i]);
+		}
 	}
 	printf("\n");
 }
