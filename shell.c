@@ -28,7 +28,7 @@ void expandPath(char** token);					//Expand shortcuts
 
 void pathResolution(instruction* instr_ptr);			//Path resolution
 
-void executeCommand(instruction* instr_ptr);
+void executeCommand(instruction* instr_ptr, int withBackground);	//withBackground = 0 when there's no background process, 1 when there is 
 void executePipedCommand(char ** command1, char ** command2, char ** command3);
 
 int redirectionCheck(instruction* instr_ptr, int * preRedirectionSize);
@@ -45,6 +45,8 @@ void exit_builtin(instruction* instr_ptr);		//1. Exit shell
 void cd_builtin(instruction* instr_ptr);		//2. Change Directory
 void echo_builtin(instruction* instr_ptr);		//3. Print tokens
 void jobs_builtin(instruction* instr_ptr);		//4. Print current background processes
+
+int checkBackground(instruction* instr_ptr);
 
 void clearInstruction(instruction* instr_ptr);		//Clear Instruction
 
@@ -270,7 +272,7 @@ void pathResolution(instruction* instr_ptr) {
 	
 	if (instr_ptr->tokens[0][0] == '/' && pathIsFile(instr_ptr->tokens[0])) {
 		printf("Executing command %s\n",instr_ptr->tokens[0]);
-		executeCommand(instr_ptr);
+		executeCommand(instr_ptr, 0);
 		return;
 	}
 
@@ -284,7 +286,8 @@ void pathResolution(instruction* instr_ptr) {
     strcpy(envpath, path);
 
 	char* path_split;
-
+	
+	int backgroundFlag = checkBackground(instr_ptr);
 
     for (int i = 0; i < instr_ptr->numTokens; i++) {
         if ((instr_ptr->tokens)[i] != NULL) {
@@ -340,7 +343,7 @@ void pathResolution(instruction* instr_ptr) {
             }
         }
     }
-    executeCommand(instr_ptr);
+    executeCommand(instr_ptr, backgroundFlag);
 }
 
 void printTokens(instruction* instr_ptr){
@@ -386,7 +389,7 @@ int pathIsDir(const char* path) {
 	else return 0;
 }
 
-void executeCommand(instruction* instr_ptr){
+void executeCommand(instruction* instr_ptr, int withBackground){
     int fd_in;
     int fd_out;
 
@@ -554,8 +557,13 @@ void executeCommand(instruction* instr_ptr){
         }
     }
     else{
-        //parent
-        waitpid(pid, &status, 0);
+        if(withBackground == 0){
+            //parent
+            waitpid(pid, &status, 0);
+        }
+		else{	//run in the background
+			waitpid(pid, &status, WNOHANG);
+		}
     }
 }
 
@@ -808,6 +816,29 @@ void jobs_builtin(instruction* instr_ptr) {
 	for(int i = 0; i < NUM_OF_PROCESSES; ++i) {
 		printf("%d\n",RUNNING_PROCESSES[i]);
 	}
+}
+
+int checkBackground(instruction* instr_ptr){				//return 1 if there's a & at the end of the command, which tells us this is background command 
+    int lastToken = (instr_ptr->numTokens) - 1;
+    int i;
+    if(strcmp(instr_ptr->tokens[lastToken], "&") == 0){			//this first part of if statement awknowledges that there's background processing, but then removes the & from the cmdl line
+	free(instr_ptr->tokens[lastToken]);
+        instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens-1) * sizeof(char*));
+	instr_ptr->numTokens--;
+	addNull(instr_ptr);
+
+	if(strcmp(instr_ptr->tokens[0], "&") == 0){			//check to see if there's a & at the start of command string
+
+	    memmove(instr_ptr->tokens[0], instr_ptr->tokens[1], sizeof(char*));
+	    //strcpy(instr_ptr->tokens[i], instr_ptr->tokens[i+1]);	//shift the commands so that there's no leading &
+	    instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens-1) * sizeof(char*));
+	    instr_ptr->numTokens--;
+	    addNull(instr_ptr);
+	}
+	return 1;
+    }
+    else
+        return 0;
 }
 
 void addRunningProcess(int pid) {
